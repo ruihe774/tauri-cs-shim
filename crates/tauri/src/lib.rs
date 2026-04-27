@@ -16,10 +16,10 @@ use std::sync::Arc;
 pub use tauri_macros::{command, generate_context, generate_handler};
 
 pub use ipc::{CommandRequest, InvokeError};
-pub use event::{EventId, EventTarget};
+pub use event::{Event, EventId, EventTarget};
 pub use manager::{
-    App, AppHandle, Config, Emitter, Manager, Runtime, State, StateManager, WebviewWindow, Window,
-    Wry,
+    App, AppHandle, Config, Emitter, Listener, Manager, Runtime, State, StateManager,
+    WebviewWindow, Window, Wry,
 };
 
 use manager::AppInner;
@@ -159,6 +159,9 @@ impl Builder {
             setup(&mut app).map_err(Error::Setup)?;
         }
 
+        // Spawn the dispatch task that drives backend listeners off the bus.
+        spawn_listener_dispatch(self.inner.clone());
+
         Ok(Server {
             local_addr,
             listener,
@@ -238,6 +241,64 @@ impl Server {
             .with_graceful_shutdown(shutdown)
             .await?;
         Ok(())
+    }
+}
+
+fn spawn_listener_dispatch(inner: Arc<AppInner>) {
+    let mut rx = inner.events.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(env) => dispatch_envelope(&inner, env),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "backend listener dispatch lagged");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+fn dispatch_envelope(inner: &AppInner, env: event::EventEnvelope) {
+    use event::event_matches_listener;
+
+    let to_call: Vec<(EventId, _, bool)> = {
+        let map = inner.listeners.lock().expect("listeners poisoned");
+        map.iter()
+            .filter(|(_, e)| {
+                e.event_name == env.event && event_matches_listener(&env.target, &e.target)
+            })
+            .map(|(id, e)| (*id, e.handler.clone(), e.once))
+            .collect()
+    };
+    if to_call.is_empty() {
+        return;
+    }
+
+    let mut to_remove: Vec<EventId> = Vec::new();
+    for (id, handler, once) in to_call {
+        let event = event::Event {
+            id: env.id,
+            event: env.event.clone(),
+            payload: env.payload.clone(),
+            source: env.source.clone(),
+        };
+        // Handlers are user code; isolate panics so one bad handler doesn't
+        // poison the dispatch task.
+        let h = std::panic::AssertUnwindSafe(|| handler(event));
+        if let Err(panic) = std::panic::catch_unwind(h) {
+            tracing::error!(?panic, listener_id = id, "backend listener panicked");
+        }
+        if once {
+            to_remove.push(id);
+        }
+    }
+    if !to_remove.is_empty() {
+        let mut map = inner.listeners.lock().expect("listeners poisoned");
+        for id in to_remove {
+            map.remove(&id);
+        }
     }
 }
 

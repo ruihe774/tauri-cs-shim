@@ -7,11 +7,11 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use tokio::sync::broadcast;
 
-use crate::event::EventEnvelope;
+use crate::event::{EventEnvelope, EventId, EventTarget};
 
 /// Marker trait used as a type parameter on [`AppHandle`] etc., for parity
 /// with upstream Tauri. The shim never dispatches on it.
@@ -101,11 +101,20 @@ impl<T: 'static> State<'_, T> {
     }
 }
 
+/// Per-listener data stored in `AppInner::listeners`.
+pub(crate) struct ListenerEntry {
+    pub event_name: String,
+    pub target: EventTarget,
+    pub handler: Arc<dyn Fn(crate::event::Event) + Send + Sync + 'static>,
+    pub once: bool,
+}
+
 /// Internal app state shared by every clone of [`AppHandle`].
 pub struct AppInner {
     pub(crate) state: StateManager,
     pub(crate) windows: RwLock<HashMap<String, ()>>,
     pub(crate) events: broadcast::Sender<EventEnvelope>,
+    pub(crate) listeners: Mutex<HashMap<EventId, ListenerEntry>>,
 }
 
 impl AppInner {
@@ -119,6 +128,7 @@ impl AppInner {
             state: StateManager::new(),
             windows: RwLock::new(windows),
             events,
+            listeners: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -329,6 +339,127 @@ impl<R: Runtime> Emitter<R> for App<R> {
 impl<R: Runtime> Emitter<R> for Window<R> {
     fn emitter_source(&self) -> crate::event::EventTarget {
         crate::event::EventTarget::Window {
+            label: self.label.clone(),
+        }
+    }
+}
+
+/// Trait for entities that can register backend listeners on the bus.
+/// Mirrors upstream's `tauri::Listener`.
+pub trait Listener<R: Runtime>: Manager<R> {
+    /// The listener's identity, used for routing (e.g. an `App` listener on a
+    /// labelled emit gets skipped).
+    fn listener_target(&self) -> EventTarget;
+
+    fn listen<F>(&self, event: &str, handler: F) -> EventId
+    where
+        F: Fn(crate::event::Event) + Send + Sync + 'static,
+    {
+        register_listener(
+            self.app_handle(),
+            event.to_string(),
+            self.listener_target(),
+            Arc::new(handler),
+            false,
+        )
+    }
+
+    fn listen_any<F>(&self, event: &str, handler: F) -> EventId
+    where
+        F: Fn(crate::event::Event) + Send + Sync + 'static,
+    {
+        register_listener(
+            self.app_handle(),
+            event.to_string(),
+            EventTarget::Any,
+            Arc::new(handler),
+            false,
+        )
+    }
+
+    fn once<F>(&self, event: &str, handler: F) -> EventId
+    where
+        F: FnOnce(crate::event::Event) + Send + Sync + 'static,
+    {
+        let cell = Mutex::new(Some(handler));
+        register_listener(
+            self.app_handle(),
+            event.to_string(),
+            self.listener_target(),
+            Arc::new(move |ev| {
+                if let Some(h) = cell.lock().expect("once cell").take() {
+                    h(ev);
+                }
+            }),
+            true,
+        )
+    }
+
+    fn once_any<F>(&self, event: &str, handler: F) -> EventId
+    where
+        F: FnOnce(crate::event::Event) + Send + Sync + 'static,
+    {
+        let cell = Mutex::new(Some(handler));
+        register_listener(
+            self.app_handle(),
+            event.to_string(),
+            EventTarget::Any,
+            Arc::new(move |ev| {
+                if let Some(h) = cell.lock().expect("once cell").take() {
+                    h(ev);
+                }
+            }),
+            true,
+        )
+    }
+
+    fn unlisten(&self, id: EventId) {
+        let mut reg = self
+            .app_handle()
+            .inner
+            .listeners
+            .lock()
+            .expect("listeners poisoned");
+        reg.remove(&id);
+    }
+}
+
+fn register_listener<R: Runtime>(
+    handle: &AppHandle<R>,
+    event_name: String,
+    target: EventTarget,
+    handler: Arc<dyn Fn(crate::event::Event) + Send + Sync + 'static>,
+    once: bool,
+) -> EventId {
+    let id = crate::event::next_event_id();
+    let mut reg = handle.inner.listeners.lock().expect("listeners poisoned");
+    reg.insert(
+        id,
+        ListenerEntry {
+            event_name,
+            target,
+            handler,
+            once,
+        },
+    );
+    id
+}
+
+impl<R: Runtime> Listener<R> for AppHandle<R> {
+    fn listener_target(&self) -> EventTarget {
+        EventTarget::App
+    }
+}
+
+impl<R: Runtime> Listener<R> for App<R> {
+    fn listener_target(&self) -> EventTarget {
+        EventTarget::App
+    }
+}
+
+impl<R: Runtime> Listener<R> for Window<R> {
+    fn listener_target(&self) -> EventTarget {
+        EventTarget::Window {
             label: self.label.clone(),
         }
     }

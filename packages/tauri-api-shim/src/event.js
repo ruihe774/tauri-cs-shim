@@ -105,14 +105,43 @@ export async function once(name, handler) {
 }
 
 /**
- * Stub for M6. Will POST /__tauri/emit.
+ * Send an event to the backend (target = Any).
+ *
+ * @param {string} name
+ * @param {unknown} [payload]
  */
-export async function emit(_name, _payload) {
-  throw new Error('event.emit lands in M6');
+export async function emit(name, payload) {
+  await postEmit({ event: name, payload, target: { kind: 'Any' } });
 }
 
-export async function emitTo(_target, _name, _payload) {
-  throw new Error('event.emitTo lands in M6');
+/**
+ * Send an event with a specific target. `target` may be a label string
+ * (interpreted as `AnyLabel`) or a structured `EventTarget`.
+ *
+ * @param {string | { kind: string, label?: string }} target
+ * @param {string} name
+ * @param {unknown} [payload]
+ */
+export async function emitTo(target, name, payload) {
+  const t =
+    typeof target === 'string' ? { kind: 'AnyLabel', label: target } : target;
+  await postEmit({ event: name, payload, target: t });
+}
+
+async function postEmit(body) {
+  const resp = await fetch(`${baseUrl()}/__tauri/emit`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-tauri-window': windowLabel(),
+      'x-tauri-client-id': clientId(),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`emit failed: ${resp.status} ${text}`);
+  }
 }
 
 /** Constants user code may import. The shim never actually fires these. */

@@ -17,7 +17,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::InvokeHandlerFn;
-use crate::event::{EventEnvelope, EventTarget, event_matches_listener};
+use crate::event::{EventEnvelope, EventTarget, event_matches_listener, next_event_id};
 use crate::ipc::{CommandRequest, InvokeError};
 use crate::manager::{AppHandle, Wry};
 
@@ -33,6 +33,9 @@ pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/__tauri/invoke/{cmd}", post(invoke))
         .route("/__tauri/events", get(events))
+        .route("/__tauri/emit", post(emit_endpoint))
+        .route("/__tauri/listen", post(listen_noop))
+        .route("/__tauri/unlisten", post(listen_noop))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -140,6 +143,65 @@ fn register_window(handle: &AppHandle<Wry>, label: &str) {
         .write()
         .expect("windows map poisoned");
     windows.entry(label.to_string()).or_insert(());
+}
+
+/// `POST /__tauri/emit` — frontend-originated emit.
+///
+/// Body: `{ event: string, payload?: any, target?: EventTarget }`. The
+/// envelope's `source` is set to `WebviewWindow{label}` based on the
+/// `X-Tauri-Window` header so backend listeners can tell where the event
+/// came from.
+async fn emit_endpoint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    #[derive(Deserialize)]
+    struct EmitBody {
+        event: String,
+        #[serde(default)]
+        payload: Option<Value>,
+        #[serde(default)]
+        target: Option<EventTarget>,
+    }
+
+    let parsed: EmitBody = if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty emit body").into_response();
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid emit body: {e}"),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let window_label = window_from_headers(&headers);
+    register_window(&state.app_handle, &window_label);
+
+    let envelope = EventEnvelope {
+        id: next_event_id(),
+        event: parsed.event,
+        payload: parsed.payload.unwrap_or(Value::Null),
+        target: parsed.target.unwrap_or(EventTarget::Any),
+        source: EventTarget::WebviewWindow {
+            label: window_label,
+        },
+    };
+    let _ = state.app_handle.inner.events.send(envelope);
+
+    StatusCode::OK.into_response()
+}
+
+/// No-op for parity with upstream's `__TAURI_EVENT_PLUGIN_INTERNALS__`
+/// listen/unlisten accounting. The shim's SSE stream already carries every
+/// event; the JS shim doesn't need to register listeners with the server.
+async fn listen_noop() -> Response {
+    StatusCode::OK.into_response()
 }
 
 fn error_response(status: StatusCode, err: InvokeError) -> Response {
