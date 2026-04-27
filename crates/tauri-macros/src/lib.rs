@@ -43,8 +43,26 @@ fn expand_command(func: ItemFn) -> syn::Result<TokenStream2> {
         };
         let arg_ident = &pi.ident;
         let arg_ty = &pt.ty;
-        let json_key = snake_to_camel(&arg_ident.to_string());
 
+        if let Some(inner) = state_inner_type(arg_ty) {
+            // `state: State<'_, T>` — pull from the managed type-map.
+            let inner_label = quote!(#inner).to_string();
+            deserialize_stmts.push(quote! {
+                let #arg_ident: ::tauri::State<'_, #inner> =
+                    match req.app_handle().try_state::<#inner>() {
+                        Some(s) => s,
+                        None => return ::std::result::Result::Err(
+                            ::tauri::ipc::InvokeError::from_message(
+                                format!("state of type `{}` is not managed", #inner_label)
+                            )
+                        ),
+                    };
+            });
+            call_args.push(quote!(#arg_ident));
+            continue;
+        }
+
+        let json_key = snake_to_camel(&arg_ident.to_string());
         deserialize_stmts.push(quote! {
             let #arg_ident: #arg_ty = match req.body().get(#json_key) {
                 Some(v) => match ::tauri::__private::serde_json::from_value(v.clone()) {
@@ -190,6 +208,28 @@ pub fn generate_handler(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn generate_context(_input: TokenStream) -> TokenStream {
     quote!(::tauri::Context::new()).into()
+}
+
+/// If the parameter's type is `State<'_, T>` (matched syntactically by trailing
+/// segment, the same fragility upstream's macro lives with), return the inner
+/// `T`. Returns `None` otherwise.
+fn state_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
+    let last = p.path.segments.last()?;
+    if last.ident != "State" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    for arg in &args.args {
+        if let syn::GenericArgument::Type(t) = arg {
+            return Some(t);
+        }
+    }
+    None
 }
 
 /// Syntactic match for `Result<...>` (and any `::path::Result<...>` re-export).

@@ -1,20 +1,22 @@
 //! Debug shim for the `tauri` crate.
 //!
-//! M1 surface:
-//! - `Builder::default().invoke_handler(...).run(generate_context!())`
-//! - `#[tauri::command]` for sync/async functions with JSON-deserializable params
-//! - `POST /__tauri/invoke/{cmd}` HTTP endpoint backed by Axum
+//! See `docs/tauri-debug-shim-plan.md` for the full surface roadmap.
 
 pub mod ipc;
+mod manager;
 mod server;
 
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
 pub use tauri_macros::{command, generate_context, generate_handler};
 
 pub use ipc::{CommandRequest, InvokeError};
+pub use manager::{App, AppHandle, Manager, Runtime, State, StateManager, Wry};
+
+use manager::AppInner;
 
 /// Stable type alias for the dispatch future returned by command wrappers.
 pub type InvokeFuture =
@@ -23,12 +25,18 @@ pub type InvokeFuture =
 pub(crate) type InvokeHandlerFn =
     Arc<dyn Fn(CommandRequest) -> InvokeFuture + Send + Sync + 'static>;
 
+type SetupFn = Box<
+    dyn FnOnce(&mut App<Wry>) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+        + Send
+        + 'static,
+>;
+
 /// The configuration produced by `tauri::generate_context!()`.
 ///
 /// In real Tauri this carries the app config, asset bundle, and so on. The
 /// shim replaces it with a stub: the user's frontend is served by their dev
 /// server (or the static-file fallback), and we have no need for compiled-in
-/// config for M1.
+/// config in the shim.
 #[derive(Debug, Default, Clone)]
 pub struct Context {
     _private: (),
@@ -44,6 +52,7 @@ impl Context {
 pub enum Error {
     Io(std::io::Error),
     NoInvokeHandler,
+    Setup(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl std::fmt::Display for Error {
@@ -51,6 +60,7 @@ impl std::fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "i/o error: {e}"),
             Error::NoInvokeHandler => write!(f, "Builder::invoke_handler was never called"),
+            Error::Setup(e) => write!(f, "setup hook failed: {e}"),
         }
     }
 }
@@ -60,6 +70,7 @@ impl std::error::Error for Error {
         match self {
             Error::Io(e) => Some(e),
             Error::NoInvokeHandler => None,
+            Error::Setup(e) => Some(&**e),
         }
     }
 }
@@ -70,14 +81,33 @@ impl From<std::io::Error> for Error {
     }
 }
 
-#[derive(Default)]
 pub struct Builder {
+    inner: Arc<AppInner>,
     invoke_handler: Option<InvokeHandlerFn>,
+    setup: Option<SetupFn>,
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(AppInner::new()),
+            invoke_handler: None,
+            setup: None,
+        }
+    }
 }
 
 impl Builder {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Stash a value of type `T` so that commands and `Manager::state::<T>()`
+    /// can retrieve it. Subsequent attempts to manage the same type are
+    /// ignored (parity with upstream).
+    pub fn manage<T: Send + Sync + 'static>(self, state: T) -> Self {
+        self.inner.state.manage(state);
+        self
     }
 
     /// Register the handler produced by `tauri::generate_handler!`.
@@ -89,16 +119,42 @@ impl Builder {
         self
     }
 
+    /// One-shot setup hook executed after the app is built but before the
+    /// HTTP server starts serving. Useful for late state registration.
+    pub fn setup<F>(mut self, setup: F) -> Self
+    where
+        F: FnOnce(&mut App<Wry>) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+            + Send
+            + 'static,
+    {
+        self.setup = Some(Box::new(setup));
+        self
+    }
+
     /// Bind the HTTP server to `addr` without serving it. Returns a [`Server`]
     /// the caller can drive on a tokio runtime — useful for tests that need
     /// the bound port (pass `"127.0.0.1:0"`).
-    pub async fn bind(self, addr: impl tokio::net::ToSocketAddrs) -> Result<Server, Error> {
+    pub async fn bind(mut self, addr: impl tokio::net::ToSocketAddrs) -> Result<Server, Error> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
+
+        let handle = AppHandle {
+            inner: self.inner.clone(),
+            _r: PhantomData,
+        };
+
+        if let Some(setup) = self.setup.take() {
+            let mut app = App {
+                handle: handle.clone(),
+            };
+            setup(&mut app).map_err(Error::Setup)?;
+        }
+
         Ok(Server {
             local_addr,
             listener,
-            handler: self.invoke_handler,
+            handle,
+            invoke_handler: self.invoke_handler,
         })
     }
 
@@ -131,7 +187,8 @@ impl Builder {
 pub struct Server {
     pub local_addr: std::net::SocketAddr,
     listener: tokio::net::TcpListener,
-    handler: Option<InvokeHandlerFn>,
+    handle: AppHandle<Wry>,
+    invoke_handler: Option<InvokeHandlerFn>,
 }
 
 impl Server {
@@ -139,10 +196,24 @@ impl Server {
         self.local_addr
     }
 
+    pub fn app_handle(&self) -> &AppHandle<Wry> {
+        &self.handle
+    }
+
+    fn make_state(&self) -> Result<server::AppState, Error> {
+        Ok(server::AppState {
+            handler: self
+                .invoke_handler
+                .clone()
+                .ok_or(Error::NoInvokeHandler)?,
+            app_handle: self.handle.clone(),
+        })
+    }
+
     /// Serve until the listener errors or the process exits.
     pub async fn serve(self) -> Result<(), Error> {
-        let handler = self.handler.ok_or(Error::NoInvokeHandler)?;
-        let router = server::router(server::AppState { handler });
+        let state = self.make_state()?;
+        let router = server::router(state);
         axum::serve(self.listener, router).await?;
         Ok(())
     }
@@ -152,8 +223,8 @@ impl Server {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let handler = self.handler.ok_or(Error::NoInvokeHandler)?;
-        let router = server::router(server::AppState { handler });
+        let state = self.make_state()?;
+        let router = server::router(state);
         axum::serve(self.listener, router)
             .with_graceful_shutdown(shutdown)
             .await?;

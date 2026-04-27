@@ -1,4 +1,4 @@
-//! Axum HTTP server. M1 only exposes `POST /__tauri/invoke/{cmd}`.
+//! Axum HTTP server.
 
 use axum::Router;
 use axum::extract::{Path, State};
@@ -10,10 +10,12 @@ use serde_json::Value;
 
 use crate::InvokeHandlerFn;
 use crate::ipc::{CommandRequest, InvokeError};
+use crate::manager::{AppHandle, Wry};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) handler: InvokeHandlerFn,
+    pub(crate) app_handle: AppHandle<Wry>,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -39,7 +41,7 @@ async fn invoke(
         }
     };
 
-    let req = CommandRequest::new(cmd, body_value);
+    let req = CommandRequest::new(cmd, body_value, state.app_handle.clone());
 
     match (state.handler)(req).await {
         Ok(value) => (StatusCode::OK, axum::Json(value)).into_response(),

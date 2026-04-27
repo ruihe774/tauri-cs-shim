@@ -2,19 +2,23 @@
 
 use serde_json::Value;
 
+use crate::manager::{AppHandle, Wry};
+
 /// A single decoded `POST /__tauri/invoke/{cmd}` request, as seen by the
 /// dispatch closure produced by `generate_handler!`.
 #[derive(Debug, Clone)]
 pub struct CommandRequest {
     name: String,
     body: Value,
+    app_handle: AppHandle<Wry>,
 }
 
 impl CommandRequest {
-    pub fn new(name: impl Into<String>, body: Value) -> Self {
+    pub fn new(name: impl Into<String>, body: Value, app_handle: AppHandle<Wry>) -> Self {
         Self {
             name: name.into(),
             body,
+            app_handle,
         }
     }
 
@@ -26,8 +30,8 @@ impl CommandRequest {
         &self.body
     }
 
-    pub fn into_parts(self) -> (String, Value) {
-        (self.name, self.body)
+    pub fn app_handle(&self) -> &AppHandle<Wry> {
+        &self.app_handle
     }
 }
 
