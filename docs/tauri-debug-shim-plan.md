@@ -1,4 +1,4 @@
-# Tauri Debug Shim — Implementation Plan
+# Tauri C/S Shim — Implementation Plan
 
 A debug shim that allows a Tauri 2.x application to be run as an ordinary HTTP server, so the Rust backend can be exercised from a real browser (with full Chrome/Firefox devtools) instead of through the system webview. The user's application source code is unmodified; the shim swaps in for the `tauri` crate and the `@tauri-apps/api` JS package via Cargo patching and a Vite alias.
 
@@ -29,7 +29,7 @@ The Rust shim uses `tokio` as its runtime, `axum` for HTTP, `tower-http` for sta
 ## 3. Repository Structure
 
 ```
-tauri-debug-shim/
+tauri-cs-shim/
 ├── Cargo.toml              # workspace
 ├── crates/
 │   ├── tauri/              # the shim crate, package name = "tauri"
@@ -174,11 +174,11 @@ CORS is permissive when `TAURI_DEBUG_PORT` differs from the frontend dev-server 
 
 ## 6. The JS Frontend Shim Package
 
-Published as `@tauri-debug-shim/api` (or similar) and aliased to `@tauri-apps/api` via the user's bundler:
+Published as `@tauri-cs-shim/api` (or similar) and aliased to `@tauri-apps/api` via the user's bundler:
 
 ```js
 // vite.config.ts
-resolve: { alias: { '@tauri-apps/api': '@tauri-debug-shim/api' } }
+resolve: { alias: { '@tauri-apps/api': '@tauri-cs-shim/api' } }
 ```
 
 The package mirrors the upstream module structure: subpath imports `@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window`, `@tauri-apps/api/webviewWindow`. Each subpath is a separate entry point so the alias picks them up.
@@ -209,8 +209,8 @@ Two integration paths.
 
 ```toml
 [patch.crates-io]
-tauri = { path = "path/to/tauri-debug-shim/crates/tauri" }
-tauri-macros = { path = "path/to/tauri-debug-shim/crates/tauri-macros" }
+tauri = { path = "path/to/tauri-cs-shim/crates/tauri" }
+tauri-macros = { path = "path/to/tauri-cs-shim/crates/tauri-macros" }
 ```
 
 They build with `cargo build` as usual; the resulting binary is the HTTP server. They add the Vite alias as shown in §6 and run their frontend dev server. They open `http://localhost:5173` (Vite) which talks to `http://localhost:1421` (shim).
