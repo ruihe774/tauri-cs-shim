@@ -71,6 +71,42 @@ fn expand_command(func: ItemFn) -> syn::Result<TokenStream2> {
         quote! { #fn_name(#(#call_args),*) }
     };
 
+    let return_handling = if returns_result(&func.sig.output) {
+        quote! {
+            let __ret = #invocation;
+            match __ret {
+                ::std::result::Result::Ok(v) => match ::tauri::__private::serde_json::to_value(&v) {
+                    Ok(jv) => ::std::result::Result::Ok(jv),
+                    Err(e) => ::std::result::Result::Err(
+                        ::tauri::ipc::InvokeError::from_message(
+                            format!("failed to serialize return value: {}", e)
+                        )
+                    ),
+                },
+                ::std::result::Result::Err(e) => match ::tauri::__private::serde_json::to_value(&e) {
+                    Ok(jv) => ::std::result::Result::Err(::tauri::ipc::InvokeError::new(jv)),
+                    Err(se) => ::std::result::Result::Err(
+                        ::tauri::ipc::InvokeError::from_message(
+                            format!("failed to serialize error value: {}", se)
+                        )
+                    ),
+                },
+            }
+        }
+    } else {
+        quote! {
+            let __ret = #invocation;
+            match ::tauri::__private::serde_json::to_value(&__ret) {
+                Ok(v) => ::std::result::Result::Ok(v),
+                Err(e) => ::std::result::Result::Err(
+                    ::tauri::ipc::InvokeError::from_message(
+                        format!("failed to serialize return value: {}", e)
+                    )
+                ),
+            }
+        }
+    };
+
     let wrapper = quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
@@ -88,15 +124,7 @@ fn expand_command(func: ItemFn) -> syn::Result<TokenStream2> {
         > {
             ::std::boxed::Box::pin(async move {
                 #(#deserialize_stmts)*
-                let __ret = #invocation;
-                match ::tauri::__private::serde_json::to_value(&__ret) {
-                    Ok(v) => ::std::result::Result::Ok(v),
-                    Err(e) => ::std::result::Result::Err(
-                        ::tauri::ipc::InvokeError::from_message(
-                            format!("failed to serialize return value: {}", e)
-                        )
-                    ),
-                }
+                #return_handling
             })
         }
     };
@@ -162,6 +190,23 @@ pub fn generate_handler(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn generate_context(_input: TokenStream) -> TokenStream {
     quote!(::tauri::Context::new()).into()
+}
+
+/// Syntactic match for `Result<...>` (and any `::path::Result<...>` re-export).
+/// We can't resolve types in a proc-macro, so this matches the trailing path
+/// segment — the same fragility upstream Tauri lives with.
+fn returns_result(ret: &syn::ReturnType) -> bool {
+    match ret {
+        syn::ReturnType::Default => false,
+        syn::ReturnType::Type(_, ty) => match &**ty {
+            syn::Type::Path(p) => p
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "Result"),
+            _ => false,
+        },
+    }
 }
 
 fn snake_to_camel(snake: &str) -> String {
