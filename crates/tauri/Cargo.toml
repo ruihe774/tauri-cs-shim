@@ -1,6 +1,10 @@
 [package]
 name = "tauri"
-version = "0.1.0"
+# Mimics upstream's 2.x major version so [patch.crates-io] = { path = ... }
+# satisfies user crates that declare `tauri = "2"`. The patch line in the
+# consumer's Cargo.toml is what selects the shim; the version here just has
+# to be a 2.x.
+version = "2.99.0"
 edition.workspace = true
 
 [dependencies]

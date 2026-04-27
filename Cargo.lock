@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "tauri"
-version = "0.1.0"
+version = "2.99.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-build"
-version = "0.1.0"
+version = "2.99.0"
 
 [[package]]
 name = "tauri-macros"
