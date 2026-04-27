@@ -70,16 +70,9 @@ impl From<std::io::Error> for Error {
     }
 }
 
+#[derive(Default)]
 pub struct Builder {
     invoke_handler: Option<InvokeHandlerFn>,
-}
-
-impl Default for Builder {
-    fn default() -> Self {
-        Self {
-            invoke_handler: None,
-        }
-    }
 }
 
 impl Builder {
