@@ -1,0 +1,71 @@
+//! IPC types shared between the HTTP server and macro-generated wrappers.
+
+use serde_json::Value;
+
+/// A single decoded `POST /__tauri/invoke/{cmd}` request, as seen by the
+/// dispatch closure produced by `generate_handler!`.
+#[derive(Debug, Clone)]
+pub struct CommandRequest {
+    name: String,
+    body: Value,
+}
+
+impl CommandRequest {
+    pub fn new(name: impl Into<String>, body: Value) -> Self {
+        Self {
+            name: name.into(),
+            body,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn body(&self) -> &Value {
+        &self.body
+    }
+
+    pub fn into_parts(self) -> (String, Value) {
+        (self.name, self.body)
+    }
+}
+
+/// An error returned from a command handler. Serialized as the JSON body of a
+/// `422 Unprocessable Entity` response.
+#[derive(Debug, Clone)]
+pub struct InvokeError(Value);
+
+impl InvokeError {
+    pub fn new(value: Value) -> Self {
+        Self(value)
+    }
+
+    pub fn from_message(msg: impl Into<String>) -> Self {
+        Self(Value::String(msg.into()))
+    }
+
+    pub fn not_found(name: impl Into<String>) -> Self {
+        let name = name.into();
+        Self(serde_json::json!({
+            "kind": "not_found",
+            "command": name,
+        }))
+    }
+
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for InvokeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for InvokeError {}
