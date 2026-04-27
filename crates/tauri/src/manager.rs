@@ -95,9 +95,17 @@ impl<T: ?Sized + std::fmt::Debug + 'static> std::fmt::Debug for State<'_, T> {
     }
 }
 
-impl<T: 'static> State<'_, T> {
-    pub fn inner(&self) -> &T {
-        &self.inner
+impl<'r, T: 'static> State<'r, T> {
+    /// Mirrors `tauri::State::inner` — the borrow lifetime is `'r`
+    /// (the State's own lifetime parameter), not the lifetime of `&self`.
+    /// User code relies on this to thread state borrows past temporary
+    /// `State` values.
+    pub fn inner(&self) -> &'r T {
+        // SAFETY: the underlying value is owned by the StateManager (via
+        // `Arc<dyn Any + Send + Sync>`) and lives at least as long as the
+        // AppHandle that produced this State, which is `'r`. We hand the
+        // caller a reference with that lifetime.
+        unsafe { &*Arc::as_ptr(&self.inner) }
     }
 }
 

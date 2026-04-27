@@ -43,60 +43,18 @@ fn expand_command(func: ItemFn) -> syn::Result<TokenStream2> {
         };
         let arg_ident = &pi.ident;
         let arg_ty = &pt.ty;
-
-        if let Some(inner) = state_inner_type(arg_ty) {
-            // `state: State<'_, T>` — pull from the managed type-map.
-            let inner_label = quote!(#inner).to_string();
-            deserialize_stmts.push(quote! {
-                let #arg_ident: ::tauri::State<'_, #inner> =
-                    match req.app_handle().try_state::<#inner>() {
-                        Some(s) => s,
-                        None => return ::std::result::Result::Err(
-                            ::tauri::ipc::InvokeError::from_message(
-                                format!("state of type `{}` is not managed", #inner_label)
-                            )
-                        ),
-                    };
-            });
-            call_args.push(quote!(#arg_ident));
-            continue;
-        }
-
-        if matches_trailing_segment(arg_ty, "AppHandle") {
-            deserialize_stmts.push(quote! {
-                let #arg_ident = req.app_handle().clone();
-            });
-            call_args.push(quote!(#arg_ident));
-            continue;
-        }
-
-        if matches_trailing_segment(arg_ty, "Window")
-            || matches_trailing_segment(arg_ty, "WebviewWindow")
-        {
-            deserialize_stmts.push(quote! {
-                let #arg_ident = req.window();
-            });
-            call_args.push(quote!(#arg_ident));
-            continue;
-        }
-
         let json_key = snake_to_camel(&arg_ident.to_string());
+
+        // Trait dispatch via `CommandArg` mirrors upstream Tauri:
+        // - serde-deserializable types fall through the blanket impl,
+        // - `State<'_, T>` / `AppHandle` / `Window` / `WebviewWindow` have
+        //   specific impls, including through type aliases.
         deserialize_stmts.push(quote! {
-            let #arg_ident: #arg_ty = match req.body().get(#json_key) {
-                Some(v) => match ::tauri::__private::serde_json::from_value(v.clone()) {
-                    Ok(val) => val,
-                    Err(e) => return ::std::result::Result::Err(
-                        ::tauri::ipc::InvokeError::from_message(
-                            format!("invalid argument `{}`: {}", #json_key, e)
-                        )
-                    ),
-                },
-                None => return ::std::result::Result::Err(
-                    ::tauri::ipc::InvokeError::from_message(
-                        format!("missing argument `{}`", #json_key)
-                    )
-                ),
-            };
+            let #arg_ident: #arg_ty =
+                match <#arg_ty as ::tauri::ipc::CommandArg<'_>>::from_command(&req, #json_key) {
+                    ::std::result::Result::Ok(v) => v,
+                    ::std::result::Result::Err(e) => return ::std::result::Result::Err(e),
+                };
         });
         call_args.push(quote!(#arg_ident));
     }
@@ -226,40 +184,6 @@ pub fn generate_handler(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn generate_context(_input: TokenStream) -> TokenStream {
     quote!(::tauri::Context::new()).into()
-}
-
-/// Whether the trailing path segment of `ty` matches `name`. Used to detect
-/// special parameters by syntactic shape — the same fragility upstream lives
-/// with: `use tauri::AppHandle as MyHandle;` would defeat this.
-fn matches_trailing_segment(ty: &syn::Type, name: &str) -> bool {
-    if let syn::Type::Path(p) = ty
-        && let Some(last) = p.path.segments.last()
-    {
-        return last.ident == name;
-    }
-    false
-}
-
-/// If the parameter's type is `State<'_, T>` (matched syntactically by trailing
-/// segment, the same fragility upstream's macro lives with), return the inner
-/// `T`. Returns `None` otherwise.
-fn state_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
-    let syn::Type::Path(p) = ty else {
-        return None;
-    };
-    let last = p.path.segments.last()?;
-    if last.ident != "State" {
-        return None;
-    }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
-        return None;
-    };
-    for arg in &args.args {
-        if let syn::GenericArgument::Type(t) = arg {
-            return Some(t);
-        }
-    }
-    None
 }
 
 /// Syntactic match for `Result<...>` (and any `::path::Result<...>` re-export).

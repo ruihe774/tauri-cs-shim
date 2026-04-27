@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
-use tauri::{Listener, Manager};
+use tauri::Listener;
 use tokio::sync::oneshot;
 
 #[derive(Clone, Default)]

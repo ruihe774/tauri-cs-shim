@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::Manager;
 use tokio::sync::oneshot;
 
 #[derive(Default)]
