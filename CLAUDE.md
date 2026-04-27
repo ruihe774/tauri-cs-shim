@@ -19,9 +19,20 @@ for scope decisions. Read it before making API surface changes.
   `generate_context!` proc-macros.
 - `crates/tauri-build/` — no-op stub crate, version `2.99.0`. Only exists so
   user `build.rs` calling `tauri_build::build()` compiles.
-- `packages/tauri-api-shim/` — JS half. Aliased to `@tauri-apps/api` via the
-  consumer's Vite config. ESM only.
+- `packages/tauri-api-shim/` — JS half. Its `package.json` declares
+  `name: "@tauri-apps/api"` and `version: "2.99.0"` so the consumer can wire
+  it via `"@tauri-apps/api": "link:../tauri-cs-shim/packages/tauri-api-shim"`.
+  No Vite alias needed — Vite resolves the subpath imports through the
+  package's `exports` map. ESM only.
+- `packages/tauri-cs-cli/` — `tauri dev` CLI launcher. Its `package.json`
+  declares `name: "@tauri-apps/cli"` so a `link:` dep drops a `tauri` bin
+  into the consumer's `node_modules/.bin/`. Spawns vite + cargo run, polls
+  both ports, opens browser, tree-kills on Ctrl-C.
 - `examples/basic/` — smallest demo binary.
+
+**Use `link:`, not `file:`.** pnpm copies `file:` deps into `node_modules`,
+which means consumer-side `pnpm tauri dev` won't pick up edits to the shim
+until they reinstall. With `link:` it's a live symlink.
 
 ## How commands work
 
@@ -125,16 +136,25 @@ The realistic path for "make this user project work":
 1. Survey the app's `tauri::*` surface and its frontend `@tauri-apps/api/*`
    imports (use the Explore agent).
 2. Add stubs for any new methods or types that show up.
-3. Patch the consumer to drop unused plugin deps and wire the
-   `[patch.crates-io]` table + Vite alias on a **new branch** in their
-   repo, never on `main`.
+3. Patch the consumer on a **new branch** in their repo, never on `main`:
+   - `[patch.crates-io]` for `tauri` + `tauri-build` in the workspace
+     `Cargo.toml`.
+   - `"@tauri-apps/api": "link:..."` and `"@tauri-apps/cli": "link:..."` in
+     `package.json`. Drop unused plugin deps. **`link:` not `file:`** —
+     pnpm copies `file:` and edits won't propagate.
 4. `cargo build` the consumer, fix what surfaces, iterate.
-5. Smoke-test the binary with `curl` against a known command before
-   declaring done.
+5. `cargo update -p tauri --precise 2.99.0` (and tauri-build) once if cargo
+   warns "patch was not used" — that means the consumer's lockfile pinned
+   the upstream version and needs to flip.
+6. Run `pnpm tauri dev`. The shim's CLI launcher orchestrates everything.
+7. Smoke-test the binary with `curl` against a known command and the SSE
+   endpoint before declaring done.
 
 ## Things deferred
 
-`docs/tauri-debug-shim-plan.md` §9 lists M7-M10 (npm-publishable JS package,
-`ipc::Request`/raw bytes/`Channel<T>`, `cargo tauri-debug` CLI, polish).
-None of these are required for the current sample-fit work. Don't pull them
-in unless asked.
+`docs/tauri-debug-shim-plan.md` §9 lists M7-M10. M7 (npm-publishable JS) and
+M9 (CLI runner) are now done in spirit via the `link:`-installable JS shim
+and `packages/tauri-cs-cli`. Still deferred: M8 (`ipc::Request` raw bytes,
+`Channel<T>` streaming) and M10 (`rename_all` macro arg, `path()` resolver,
+panic-to-500, graceful SIGINT in the Rust shim itself, structured logging
+polish). Don't pull them in unless asked.

@@ -26,7 +26,7 @@ async function ensureSSE() {
   if (_ssePromise !== null) return _ssePromise;
   if (typeof EventSource === 'undefined') {
     throw new Error(
-      '@tauri-cs-shim/api/event requires global EventSource (Node 22+ or a browser)'
+      '@tauri-apps/api/event (shim) requires global EventSource (Node 22+ or a browser)'
     );
   }
   const url = `${baseUrl()}/__tauri/events?clientId=${encodeURIComponent(

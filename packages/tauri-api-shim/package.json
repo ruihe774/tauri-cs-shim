@@ -1,7 +1,7 @@
 {
-  "name": "@tauri-cs-shim/api",
-  "version": "0.1.0",
-  "description": "Frontend half of tauri-cs-shim: drop-in replacement for @tauri-apps/api that talks to the debug HTTP server.",
+  "name": "@tauri-apps/api",
+  "version": "2.99.0",
+  "description": "Frontend half of tauri-cs-shim: drop-in replacement for @tauri-apps/api that talks to the debug HTTP server. Mimics the upstream package name + 2.x version so consumers can wire it via `link:`.",
   "type": "module",
   "exports": {
     ".": "./src/index.js",

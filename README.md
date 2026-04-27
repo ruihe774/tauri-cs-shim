@@ -5,9 +5,10 @@ ordinary HTTP server, so you can drive the Rust backend from a real browser
 with full Chrome / Firefox DevTools — instead of through the system webview.
 
 The user's application source code is unmodified. The shim swaps in for the
-`tauri` crate via `[patch.crates-io]` and for `@tauri-apps/api` via a Vite
-alias. Backend commands round-trip through `POST /__tauri/invoke/{name}` and
-events flow through Server-Sent Events on `/__tauri/events`.
+`tauri` crate via `[patch.crates-io]` and for the `@tauri-apps/api` and
+`@tauri-apps/cli` npm packages via `link:` deps. Backend commands round-trip
+through `POST /__tauri/invoke/{name}` and events flow through Server-Sent
+Events on `/__tauri/events`.
 
 ## What works
 
@@ -15,7 +16,7 @@ events flow through Server-Sent Events on `/__tauri/events`.
 | --- | --- |
 | `#[tauri::command]` (sync, async, `Result<T, E>`) | yes |
 | Parameter injection: `State<'_, T>` (incl. type aliases), `AppHandle`, `Window`, `WebviewWindow` | yes |
-| `Builder::default/manage/setup/invoke_handler/run/bind` | yes |
+| `Builder::default/new/manage/setup/invoke_handler/run/bind` | yes |
 | `Manager` trait (state, windows, config stub) | yes |
 | `Emitter` trait (`emit`, `emit_to`, `emit_filter`) | yes |
 | `Listener` trait (`listen`, `listen_any`, `once`, `unlisten`) with backend dispatch task | yes |
@@ -25,6 +26,8 @@ events flow through Server-Sent Events on `/__tauri/events`.
 | `tauri_build::build()` and friends | no-op stub |
 | `generate_handler!`, `generate_context!`, `Window`/stub `set_title`/`show`/etc. | yes |
 | JS shim: `core.invoke`, `event.{listen, once, emit, emitTo, TauriEvent}`, `window.getCurrentWindow` | yes |
+| `tauri` CLI: `tauri dev` (vite + cargo run + browser open + Ctrl-C teardown) | yes |
+| `tauri build` | rejected (no webview to bundle) |
 
 ## What's explicitly out of scope
 
@@ -46,7 +49,8 @@ tauri-cs-shim/
 │   ├── tauri-build/       # no-op stub for build.rs
 │   └── tauri-macros/      # #[command], generate_handler!, generate_context!
 ├── packages/
-│   └── tauri-api-shim/    # JS half — aliased to @tauri-apps/api
+│   ├── tauri-api-shim/    # JS half — package name @tauri-apps/api
+│   └── tauri-cs-cli/      # CLI launcher — package name @tauri-apps/cli
 ├── examples/
 │   └── basic/             # smallest end-to-end demo
 └── docs/
@@ -55,52 +59,72 @@ tauri-cs-shim/
 
 ## Wiring it into a Tauri project
 
-In your project's workspace `Cargo.toml`:
+The shim is designed to live alongside your project on disk. Clone it next to
+your project and patch its packages in.
+
+### Rust side — workspace `Cargo.toml`
 
 ```toml
 [patch.crates-io]
-tauri = { path = "/path/to/tauri-cs-shim/crates/tauri" }
-tauri-build = { path = "/path/to/tauri-cs-shim/crates/tauri-build" }
+tauri = { path = "../tauri-cs-shim/crates/tauri" }
+tauri-build = { path = "../tauri-cs-shim/crates/tauri-build" }
 ```
 
-If your `Cargo.lock` already pinned the upstream versions, run
-`cargo update -p tauri --precise 2.99.0 && cargo update -p tauri-build --precise 2.99.0`
+If `Cargo.lock` already pinned the upstream versions, run
+
+```sh
+cargo update -p tauri --precise 2.99.0
+cargo update -p tauri-build --precise 2.99.0
+```
+
 once to switch the lockfile over. (The shim crates use a `2.99.0` version so
 they satisfy any `tauri = "2"` requirement.)
 
-In your `vite.config.ts`:
+If your project's `src-tauri/Cargo.toml` declares `tauri-plugin-*`
+build-dependencies or runtime dependencies, drop those — the shim doesn't
+implement plugins and the plugin crates will fail to compile. Likewise drop
+any `Builder::plugin(...)` chains in `main.rs`.
 
-```ts
-resolve: {
-  alias: [
-    { find: /^@tauri-apps\/api\/core$/,
-      replacement: "/path/to/tauri-cs-shim/packages/tauri-api-shim/src/core.js" },
-    { find: /^@tauri-apps\/api\/event$/,
-      replacement: "/path/to/tauri-cs-shim/packages/tauri-api-shim/src/event.js" },
-    { find: /^@tauri-apps\/api\/(window|webviewWindow)$/,
-      replacement: "/path/to/tauri-cs-shim/packages/tauri-api-shim/src/window.js" },
-    { find: /^@tauri-apps\/api$/,
-      replacement: "/path/to/tauri-cs-shim/packages/tauri-api-shim/src/index.js" },
-  ],
+### Frontend — `package.json`
+
+```json
+{
+  "dependencies": {
+    "@tauri-apps/api": "link:../tauri-cs-shim/packages/tauri-api-shim"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "link:../tauri-cs-shim/packages/tauri-cs-cli"
+  }
 }
 ```
 
-Then:
+**Use `link:`, not `file:`.** pnpm copies `file:` deps into `node_modules` and
+edits to the shim won't be picked up; `link:` creates a symlink.
+
+After editing `package.json`, run `pnpm install --no-frozen-lockfile` to
+register the new symlinks. No Vite alias is needed — Vite resolves the
+subpath imports (`@tauri-apps/api/core`, `/event`, `/window`,
+`/webviewWindow`) through the shim's `package.json` `exports` map.
+
+### Run
 
 ```sh
-# Terminal 1 — the Rust shim binary
-cargo run
-
-# Terminal 2 — the Vite dev server
-pnpm dev    # or npm / yarn
-
-# Open http://localhost:5173 (or whatever Vite reports) in Chrome.
+pnpm tauri dev
 ```
 
-The shim listens on `127.0.0.1:1421` by default. Override with
-`TAURI_DEBUG_PORT` and `TAURI_DEBUG_HOST`.
+The shim's CLI launcher starts the Rust binary (`cargo run --manifest-path
+src-tauri/Cargo.toml`) on `127.0.0.1:1421` and the dev server on whatever
+`build.devUrl` says (typically `http://localhost:1420`), polls both ports,
+and opens the system browser. `Ctrl-C` tears the whole tree down. Override
+the Rust port with `TAURI_DEBUG_PORT` / `TAURI_DEBUG_HOST` if 1421 is busy.
 
-## Running the example
+`pnpm tauri build` is rejected with a clear error — the shim has no webview
+to bundle. Use the upstream Tauri CLI for production builds (i.e., off this
+branch).
+
+## Running the bundled example
+
+The repo's own example runs without any patching:
 
 ```sh
 cargo run -p basic-example &
@@ -116,13 +140,16 @@ curl -X POST -H 'content-type: application/json' \
 cargo test --workspace
 ```
 
-Some tests spawn `node --test` against the JS shim (`crates/tauri/tests/m5_js_shim.rs`,
-`m6_js_shim.rs`). They skip automatically if `node` isn't on `PATH`. Node 22+
-is required for the built-in `EventSource` global; the test runner passes
+Some tests spawn `node --test` against the JS shim
+(`crates/tauri/tests/m5_js_shim.rs`, `m6_js_shim.rs`). They skip
+automatically if `node` isn't on `PATH`. Node 22+ is required for the
+built-in `EventSource` global; the test runner passes
 `--experimental-eventsource` for older Node 22 patch versions.
 
 ## Status
 
 This is a development/debugging tool — not a production runtime. Plugin code
 paths are unimplemented and would need to be worked around in the consuming
-app. See `docs/tauri-debug-shim-plan.md` for the full design and scope notes.
+app. See `docs/tauri-debug-shim-plan.md` for the full design and scope notes,
+and `CLAUDE.md` for notes on the repo's internals aimed at future
+contributors.
