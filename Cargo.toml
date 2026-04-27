@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/tauri",
+    "crates/tauri-build",
     "crates/tauri-macros",
     "examples/basic",
 ]
@@ -11,6 +12,7 @@ edition = "2024"
 
 [workspace.dependencies]
 tauri = { path = "crates/tauri" }
+tauri-build = { path = "crates/tauri-build" }
 tauri-macros = { path = "crates/tauri-macros" }
 
 serde = { version = "1.0.228", features = ["derive"] }

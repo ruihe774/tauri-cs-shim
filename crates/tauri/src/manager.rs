@@ -159,6 +159,22 @@ impl AppHandle<Wry> {
     pub fn exit(&self, code: i32) -> ! {
         std::process::exit(code)
     }
+
+    /// Run `f` on the "main thread". Real Tauri marshals this onto the
+    /// runtime's GUI loop; the shim has no such loop, so we just invoke the
+    /// closure inline. The signature matches upstream so user code that
+    /// returns `Result<(), Error>` keeps compiling.
+    ///
+    /// Used by code that emits events from background threads where touching
+    /// the webview directly would be unsafe upstream — under the shim that
+    /// concern doesn't exist, so the closure runs synchronously here.
+    pub fn run_on_main_thread<F>(&self, f: F) -> Result<(), crate::Error>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        f();
+        Ok(())
+    }
 }
 
 /// Owned handle held by `Builder::setup`. In upstream Tauri this is distinct

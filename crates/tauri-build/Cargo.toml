@@ -1,0 +1,5 @@
+[package]
+name = "tauri-build"
+version = "0.1.0"
+edition.workspace = true
+description = "No-op stub for the upstream tauri-build crate so user build.rs scripts compile against the debug shim."
