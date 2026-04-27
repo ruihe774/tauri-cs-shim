@@ -34,6 +34,13 @@ for scope decisions. Read it before making API surface changes.
 which means consumer-side `pnpm tauri dev` won't pick up edits to the shim
 until they reinstall. With `link:` it's a live symlink.
 
+**`runtime.js::baseUrl()` defaults to `http://<hostname>:1421` in the
+browser.** Vite serves the page on 1420; the Rust shim listens on 1421
+and these are different origins. Without that default, `fetch('/__tauri/...')`
+hits Vite and 404s. Override via `window.__TAURI_DEBUG_BASE__` if the user
+moved the shim with `TAURI_DEBUG_PORT`. Permissive CORS on the Rust side
+is what makes cross-origin work.
+
 ## How commands work
 
 The `#[command]` macro emits a wrapper `__tauri_cmd_<name>(req)` next to the

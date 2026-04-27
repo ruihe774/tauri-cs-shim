@@ -1,9 +1,13 @@
 // Shared runtime helpers: base URL, window label, client id.
 //
-// In a real Vite-served frontend the shim talks to /__tauri/* on the same
-// origin as the page, so baseUrl() returns "". Under Node-driven tests the
-// caller sets globalThis.__TAURI_DEBUG_BASE__ (or TAURI_DEBUG_BASE in the
-// process env) to the absolute URL of the shim server.
+// In a browser, the page is served by Vite (e.g. http://localhost:1420)
+// while the Rust shim listens on a different port (default 1421). Default
+// to `http://<hostname>:1421` so /__tauri/* requests reach the shim, not
+// Vite. Override by setting `window.__TAURI_DEBUG_BASE__` (e.g. in
+// index.html) if you've moved the shim with TAURI_DEBUG_PORT.
+//
+// Under Node-driven tests the caller sets globalThis.__TAURI_DEBUG_BASE__
+// (or TAURI_DEBUG_BASE in the process env) to the absolute URL.
 
 export function baseUrl() {
   if (typeof globalThis.__TAURI_DEBUG_BASE__ === 'string') {
@@ -11,6 +15,9 @@ export function baseUrl() {
   }
   if (typeof process !== 'undefined' && process.env && process.env.TAURI_DEBUG_BASE) {
     return process.env.TAURI_DEBUG_BASE;
+  }
+  if (typeof window !== 'undefined' && window.location) {
+    return `${window.location.protocol}//${window.location.hostname}:1421`;
   }
   return '';
 }
