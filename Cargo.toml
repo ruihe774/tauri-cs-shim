@@ -4,7 +4,7 @@ members = [
     "crates/tauri",
     "crates/tauri-build",
     "crates/tauri-macros",
-    "examples/basic",
+    "examples/basic/src-tauri",
 ]
 
 [workspace.package]

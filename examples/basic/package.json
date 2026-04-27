@@ -1,0 +1,18 @@
+{
+  "name": "basic-example-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "link:../../packages/tauri-api-shim"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "link:../../packages/tauri-cs-cli",
+    "vite": "^5.4.10"
+  }
+}

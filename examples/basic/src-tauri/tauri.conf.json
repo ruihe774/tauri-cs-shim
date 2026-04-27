@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "basic-example",
+  "version": "0.1.0",
+  "identifier": "com.tauri-cs-shim.basic",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      { "label": "main", "title": "tauri-cs-shim basic", "width": 800, "height": 600 }
+    ]
+  }
+}

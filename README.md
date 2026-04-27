@@ -124,15 +124,64 @@ branch).
 
 ## Running the bundled example
 
-The repo's own example runs without any patching:
+`examples/basic/` is a full end-to-end demo: a Vite frontend in
+`examples/basic/{index.html,src/}` driving a Rust backend in
+`examples/basic/src-tauri/`. It exercises sync commands, async commands
+returning `Result<T, E>`, managed `State`, and a backend timer that emits
+`tick` events through the SSE bus.
+
+```sh
+cd examples/basic
+pnpm install --no-frozen-lockfile     # wires the link: deps once
+pnpm tauri dev                         # starts vite + cargo + opens the browser
+```
+
+You can also poke just the Rust side without a frontend:
 
 ```sh
 cargo run -p basic-example &
 curl -X POST -H 'content-type: application/json' \
      -d '{"name":"world"}' \
      http://127.0.0.1:1421/__tauri/invoke/greet
-# → "Hello, world!"
+# → "Hello, world! (from the Rust shim)"
 ```
+
+## Debugging a shimmed app from an LLM
+
+Once your app is running under the shim it is just a website plus an HTTP
+server, so any browser-automation tool an LLM can drive will work — no
+"Tauri DevTools protocol" needed. Two reliable options:
+
+### Playwright MCP
+
+Run the shim, then ask Claude to use the
+[`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) server to
+navigate to your dev URL (`http://localhost:1420`). Claude can take
+accessibility snapshots, click, fill forms, run page JS via
+`browser_evaluate`, and read the console — everything flows through real
+HTTP/SSE so any backend issue surfaces with normal stack traces. The
+example above was verified end-to-end this way.
+
+A useful pattern for backend round-trips: use `browser_evaluate` to call
+`window.__TAURI_INTERNALS__.invoke('your_command', {…})` and inspect the
+result without touching the DOM.
+
+### Claude Code for Chrome
+
+The
+[Claude for Chrome](https://claude.com/claude-for-chrome) extension
+([docs](https://code.claude.com/docs/en/chrome))
+lets the agent attach to your already-open Chromium tab. Open
+`http://localhost:1420` in Chrome, hand control to the agent, and it can
+inspect the live DOM, watch the network panel for `/__tauri/invoke/*`
+calls, read SSE frames on `/__tauri/events`, and edit the page. Because
+the shim runs the backend as a normal HTTP origin (with permissive CORS),
+nothing about the cross-origin handshake is special — DevTools shows
+exactly what the agent sees.
+
+Either way, the win over the system webview is the same: real DevTools
+network/performance/memory panels, real `console.log`, real source maps,
+and a UI surface an LLM can actually drive.
 
 ## Tests
 

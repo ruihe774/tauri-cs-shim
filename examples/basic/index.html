@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tauri-cs-shim — basic example</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>tauri-cs-shim demo</h1>
+      <p class="hint">
+        Open DevTools — every <code>invoke()</code> is a real
+        <code>fetch()</code> and every event is a real
+        <code>EventSource</code> message.
+      </p>
+
+      <section>
+        <h2>greet (sync command)</h2>
+        <form id="greet-form">
+          <input id="greet-name" placeholder="your name" value="world" />
+          <button type="submit">greet</button>
+        </form>
+        <output id="greet-out" aria-live="polite"></output>
+      </section>
+
+      <section>
+        <h2>slow_double (async + Result)</h2>
+        <form id="double-form">
+          <input id="double-n" type="number" value="21" />
+          <button type="submit">double</button>
+        </form>
+        <output id="double-out" aria-live="polite"></output>
+      </section>
+
+      <section>
+        <h2>todos (managed State + emit)</h2>
+        <form id="todo-form">
+          <input id="todo-text" placeholder="buy milk" />
+          <button type="submit">add</button>
+          <button type="button" id="todo-clear">clear</button>
+        </form>
+        <ul id="todo-list"></ul>
+      </section>
+
+      <section>
+        <h2>tick stream (backend → frontend)</h2>
+        <p>Latest tick: <span id="tick">—</span></p>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

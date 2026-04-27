@@ -1,0 +1,49 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+  max-width: 720px;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+.hint {
+  color: #888;
+  font-size: 0.9rem;
+}
+
+section {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid #4444;
+  border-radius: 6px;
+}
+
+form {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+input,
+button {
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+}
+
+output {
+  display: block;
+  margin-top: 0.6rem;
+  font-family: ui-monospace, monospace;
+}
+
+ul {
+  margin: 0.6rem 0 0;
+  padding-left: 1.2rem;
+}
