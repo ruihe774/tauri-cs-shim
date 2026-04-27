@@ -1,0 +1,19 @@
+{
+  "name": "@tauri-cs-shim/api",
+  "version": "0.1.0",
+  "description": "Frontend half of tauri-cs-shim: drop-in replacement for @tauri-apps/api that talks to the debug HTTP server.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./core": "./src/core.js",
+    "./event": "./src/event.js",
+    "./window": "./src/window.js",
+    "./webviewWindow": "./src/window.js"
+  },
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

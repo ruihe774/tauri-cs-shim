@@ -1,14 +1,23 @@
 //! Axum HTTP server.
 
+use std::convert::Infallible;
+use std::time::Duration;
+
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use bytes::Bytes;
+use futures_util::stream::{Stream, StreamExt};
+use serde::Deserialize;
 use serde_json::Value;
+use tokio_stream::wrappers::BroadcastStream;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::InvokeHandlerFn;
+use crate::event::{EventEnvelope, EventTarget, event_matches_listener};
 use crate::ipc::{CommandRequest, InvokeError};
 use crate::manager::{AppHandle, Wry};
 
@@ -23,6 +32,13 @@ pub(crate) struct AppState {
 pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/__tauri/invoke/{cmd}", post(invoke))
+        .route("/__tauri/events", get(events))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state)
 }
 
@@ -53,6 +69,59 @@ async fn invoke(
         Ok(value) => (StatusCode::OK, axum::Json(value)).into_response(),
         Err(err) => error_response(StatusCode::UNPROCESSABLE_ENTITY, err),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct EventsQuery {
+    window: Option<String>,
+    #[serde(rename = "clientId")]
+    _client_id: Option<String>,
+}
+
+async fn events(
+    State(state): State<AppState>,
+    Query(params): Query<EventsQuery>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>> + Send> {
+    let window_label = params.window.unwrap_or_else(|| DEFAULT_WINDOW.to_string());
+    register_window(&state.app_handle, &window_label);
+
+    // Build a per-client EventTarget representing the listener identity.
+    // SSE clients identify as `WebviewWindow` since user code most often
+    // emits via `window.emit()` / `app.emit_to(label, ...)`.
+    let listener = EventTarget::WebviewWindow {
+        label: window_label.clone(),
+    };
+    let rx = state.app_handle.inner.events.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(move |item| {
+        let listener = listener.clone();
+        async move {
+            let envelope = match item {
+                Ok(env) => env,
+                Err(_) => return None,
+            };
+            if !event_matches_listener(&envelope.target, &listener) {
+                return None;
+            }
+            let event = build_sse_event(&envelope);
+            Some(Ok(event))
+        }
+    });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    )
+}
+
+fn build_sse_event(envelope: &EventEnvelope) -> Event {
+    // The data is a JSON object whose shape the JS shim parses. We send the
+    // whole envelope so the JS side can dispatch by name and expose source.
+    let data = serde_json::to_string(envelope).unwrap_or_else(|_| "{}".into());
+    Event::default()
+        .event(envelope.event.clone())
+        .id(envelope.id.to_string())
+        .data(data)
 }
 
 fn window_from_headers(headers: &HeaderMap) -> String {

@@ -9,6 +9,10 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
+use tokio::sync::broadcast;
+
+use crate::event::EventEnvelope;
+
 /// Marker trait used as a type parameter on [`AppHandle`] etc., for parity
 /// with upstream Tauri. The shim never dispatches on it.
 pub trait Runtime: Send + Sync + 'static {}
@@ -98,20 +102,23 @@ impl<T: 'static> State<'_, T> {
 }
 
 /// Internal app state shared by every clone of [`AppHandle`].
-///
-/// M5/M6 extend this with an event broadcaster and listener registry.
 pub struct AppInner {
     pub(crate) state: StateManager,
     pub(crate) windows: RwLock<HashMap<String, ()>>,
+    pub(crate) events: broadcast::Sender<EventEnvelope>,
 }
 
 impl AppInner {
     pub(crate) fn new() -> Self {
         let mut windows = HashMap::new();
         windows.insert("main".to_string(), ());
+        // Capacity controls the lag tolerance for slow SSE clients. 1024 is
+        // generous for a debug session and still bounded.
+        let (events, _) = broadcast::channel::<EventEnvelope>(1024);
         Self {
             state: StateManager::new(),
             windows: RwLock::new(windows),
+            events,
         }
     }
 }
@@ -255,6 +262,75 @@ pub struct Config {
 impl Config {
     pub fn new() -> Self {
         Self { _private: () }
+    }
+}
+
+/// Trait for entities that can publish events on the bus. Mirrors upstream's
+/// `tauri::Emitter`.
+pub trait Emitter<R: Runtime>: Manager<R> {
+    /// Source identifying this emitter, used as the `source` field of the
+    /// envelope (so listeners can tell who sent the event).
+    fn emitter_source(&self) -> crate::event::EventTarget;
+
+    fn emit<S: serde::Serialize>(&self, event: &str, payload: S) -> Result<(), crate::Error> {
+        self.emit_to(crate::event::EventTarget::Any, event, payload)
+    }
+
+    fn emit_to<S, I>(&self, target: I, event: &str, payload: S) -> Result<(), crate::Error>
+    where
+        S: serde::Serialize,
+        I: Into<crate::event::EventTarget>,
+    {
+        let target = target.into();
+        let payload = serde_json::to_value(&payload).map_err(crate::Error::Serialize)?;
+        let envelope = EventEnvelope {
+            id: crate::event::next_event_id(),
+            event: event.to_string(),
+            payload,
+            target: target.clone(),
+            source: self.emitter_source(),
+        };
+        // M6: backend listeners. For M5 the broadcast goes only to SSE
+        // subscribers — the dispatcher in M6 will subscribe and route.
+        let _ = self.app_handle().inner.events.send(envelope);
+        Ok(())
+    }
+
+    fn emit_filter<S, F>(&self, event: &str, payload: S, _filter: F) -> Result<(), crate::Error>
+    where
+        S: serde::Serialize,
+        F: Fn(&crate::event::EventTarget) -> bool + Send + Sync + 'static,
+    {
+        // Real Tauri's emit_filter applies the filter at routing time. The
+        // shim's bus is broadcast-fanout; backend filtering happens per-
+        // subscriber. For M5 we treat this as `emit` (Any target) and let
+        // backend listeners (M6) apply their own filter — preserving the
+        // upstream invariant that *fewer* listeners receive the event than
+        // emit alone.
+        //
+        // TODO(M6+): once listener registry exists, evaluate filter against
+        // each listener's target instead of broadcasting to Any.
+        self.emit(event, payload)
+    }
+}
+
+impl<R: Runtime> Emitter<R> for AppHandle<R> {
+    fn emitter_source(&self) -> crate::event::EventTarget {
+        crate::event::EventTarget::App
+    }
+}
+
+impl<R: Runtime> Emitter<R> for App<R> {
+    fn emitter_source(&self) -> crate::event::EventTarget {
+        crate::event::EventTarget::App
+    }
+}
+
+impl<R: Runtime> Emitter<R> for Window<R> {
+    fn emitter_source(&self) -> crate::event::EventTarget {
+        crate::event::EventTarget::Window {
+            label: self.label.clone(),
+        }
     }
 }
 

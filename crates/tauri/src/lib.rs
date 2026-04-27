@@ -3,6 +3,7 @@
 //! See `docs/tauri-debug-shim-plan.md` for the full surface roadmap.
 
 pub mod async_runtime;
+pub mod event;
 pub mod ipc;
 mod manager;
 mod server;
@@ -15,8 +16,10 @@ use std::sync::Arc;
 pub use tauri_macros::{command, generate_context, generate_handler};
 
 pub use ipc::{CommandRequest, InvokeError};
+pub use event::{EventId, EventTarget};
 pub use manager::{
-    App, AppHandle, Config, Manager, Runtime, State, StateManager, WebviewWindow, Window, Wry,
+    App, AppHandle, Config, Emitter, Manager, Runtime, State, StateManager, WebviewWindow, Window,
+    Wry,
 };
 
 use manager::AppInner;
@@ -56,6 +59,7 @@ pub enum Error {
     Io(std::io::Error),
     NoInvokeHandler,
     Setup(Box<dyn std::error::Error + Send + Sync>),
+    Serialize(serde_json::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -64,6 +68,7 @@ impl std::fmt::Display for Error {
             Error::Io(e) => write!(f, "i/o error: {e}"),
             Error::NoInvokeHandler => write!(f, "Builder::invoke_handler was never called"),
             Error::Setup(e) => write!(f, "setup hook failed: {e}"),
+            Error::Serialize(e) => write!(f, "failed to serialize event payload: {e}"),
         }
     }
 }
@@ -74,6 +79,7 @@ impl std::error::Error for Error {
             Error::Io(e) => Some(e),
             Error::NoInvokeHandler => None,
             Error::Setup(e) => Some(&**e),
+            Error::Serialize(e) => Some(e),
         }
     }
 }
