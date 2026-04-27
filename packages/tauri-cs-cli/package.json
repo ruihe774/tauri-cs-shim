@@ -1,0 +1,15 @@
+{
+  "name": "@tauri-apps/cli",
+  "version": "2.99.0",
+  "description": "Drop-in replacement for @tauri-apps/cli that launches the tauri-cs-shim HTTP server alongside the user's frontend dev server, opening a real browser instead of a webview.",
+  "type": "module",
+  "bin": {
+    "tauri": "./bin/tauri.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin"
+  ]
+}
