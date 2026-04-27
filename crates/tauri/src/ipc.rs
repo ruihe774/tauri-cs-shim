@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::manager::{AppHandle, Wry};
+use crate::manager::{AppHandle, Window, Wry};
 
 /// A single decoded `POST /__tauri/invoke/{cmd}` request, as seen by the
 /// dispatch closure produced by `generate_handler!`.
@@ -11,14 +11,21 @@ pub struct CommandRequest {
     name: String,
     body: Value,
     app_handle: AppHandle<Wry>,
+    window_label: String,
 }
 
 impl CommandRequest {
-    pub fn new(name: impl Into<String>, body: Value, app_handle: AppHandle<Wry>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        body: Value,
+        app_handle: AppHandle<Wry>,
+        window_label: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             body,
             app_handle,
+            window_label: window_label.into(),
         }
     }
 
@@ -32,6 +39,15 @@ impl CommandRequest {
 
     pub fn app_handle(&self) -> &AppHandle<Wry> {
         &self.app_handle
+    }
+
+    pub fn window_label(&self) -> &str {
+        &self.window_label
+    }
+
+    /// Owned [`Window`] for the calling client.
+    pub fn window(&self) -> Window<Wry> {
+        Window::new(self.app_handle.clone(), self.window_label.clone())
     }
 }
 

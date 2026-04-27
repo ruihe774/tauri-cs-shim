@@ -2,6 +2,7 @@
 //!
 //! See `docs/tauri-debug-shim-plan.md` for the full surface roadmap.
 
+pub mod async_runtime;
 pub mod ipc;
 mod manager;
 mod server;
@@ -14,7 +15,9 @@ use std::sync::Arc;
 pub use tauri_macros::{command, generate_context, generate_handler};
 
 pub use ipc::{CommandRequest, InvokeError};
-pub use manager::{App, AppHandle, Manager, Runtime, State, StateManager, Wry};
+pub use manager::{
+    App, AppHandle, Config, Manager, Runtime, State, StateManager, WebviewWindow, Window, Wry,
+};
 
 use manager::AppInner;
 

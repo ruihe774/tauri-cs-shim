@@ -62,6 +62,24 @@ fn expand_command(func: ItemFn) -> syn::Result<TokenStream2> {
             continue;
         }
 
+        if matches_trailing_segment(arg_ty, "AppHandle") {
+            deserialize_stmts.push(quote! {
+                let #arg_ident = req.app_handle().clone();
+            });
+            call_args.push(quote!(#arg_ident));
+            continue;
+        }
+
+        if matches_trailing_segment(arg_ty, "Window")
+            || matches_trailing_segment(arg_ty, "WebviewWindow")
+        {
+            deserialize_stmts.push(quote! {
+                let #arg_ident = req.window();
+            });
+            call_args.push(quote!(#arg_ident));
+            continue;
+        }
+
         let json_key = snake_to_camel(&arg_ident.to_string());
         deserialize_stmts.push(quote! {
             let #arg_ident: #arg_ty = match req.body().get(#json_key) {
@@ -208,6 +226,18 @@ pub fn generate_handler(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn generate_context(_input: TokenStream) -> TokenStream {
     quote!(::tauri::Context::new()).into()
+}
+
+/// Whether the trailing path segment of `ty` matches `name`. Used to detect
+/// special parameters by syntactic shape — the same fragility upstream lives
+/// with: `use tauri::AppHandle as MyHandle;` would defeat this.
+fn matches_trailing_segment(ty: &syn::Type, name: &str) -> bool {
+    if let syn::Type::Path(p) = ty
+        && let Some(last) = p.path.segments.last()
+    {
+        return last.ident == name;
+    }
+    false
 }
 
 /// If the parameter's type is `State<'_, T>` (matched syntactically by trailing

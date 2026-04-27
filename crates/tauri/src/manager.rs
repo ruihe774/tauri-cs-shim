@@ -102,12 +102,16 @@ impl<T: 'static> State<'_, T> {
 /// M5/M6 extend this with an event broadcaster and listener registry.
 pub struct AppInner {
     pub(crate) state: StateManager,
+    pub(crate) windows: RwLock<HashMap<String, ()>>,
 }
 
 impl AppInner {
     pub(crate) fn new() -> Self {
+        let mut windows = HashMap::new();
+        windows.insert("main".to_string(), ());
         Self {
             state: StateManager::new(),
+            windows: RwLock::new(windows),
         }
     }
 }
@@ -133,6 +137,13 @@ impl<R: Runtime> std::fmt::Debug for AppHandle<R> {
     }
 }
 
+impl AppHandle<Wry> {
+    /// Best-effort process exit. Mirrors `tauri::AppHandle::exit`.
+    pub fn exit(&self, code: i32) -> ! {
+        std::process::exit(code)
+    }
+}
+
 /// Owned handle held by `Builder::setup`. In upstream Tauri this is distinct
 /// from `AppHandle` and carries the run-loop control flow; here it simply
 /// wraps an `AppHandle`.
@@ -149,6 +160,101 @@ impl<R: Runtime> App<R> {
 impl<R: Runtime> std::fmt::Debug for App<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App").finish_non_exhaustive()
+    }
+}
+
+/// Logical window in the shim. Each connected client identifies its window
+/// via the `X-Tauri-Window` header (default `"main"`). Window-side methods
+/// like `set_title` are no-ops; we never owned a real window to begin with.
+pub struct Window<R: Runtime = Wry> {
+    handle: AppHandle<R>,
+    label: String,
+}
+
+/// Type alias per the design decision — `WebviewWindow` and `Window` are the
+/// same type in the shim.
+pub type WebviewWindow<R = Wry> = Window<R>;
+
+impl<R: Runtime> Window<R> {
+    pub(crate) fn new(handle: AppHandle<R>, label: String) -> Self {
+        Self { handle, label }
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// No-op stub. Logged at debug level so the user sees the call.
+    pub fn set_title(&self, title: &str) -> Result<(), crate::Error> {
+        tracing::debug!(window = %self.label, ?title, "Window::set_title (shim no-op)");
+        Ok(())
+    }
+
+    pub fn show(&self) -> Result<(), crate::Error> {
+        tracing::debug!(window = %self.label, "Window::show (shim no-op)");
+        Ok(())
+    }
+
+    pub fn hide(&self) -> Result<(), crate::Error> {
+        tracing::debug!(window = %self.label, "Window::hide (shim no-op)");
+        Ok(())
+    }
+
+    pub fn close(&self) -> Result<(), crate::Error> {
+        tracing::debug!(window = %self.label, "Window::close (shim no-op)");
+        Ok(())
+    }
+
+    pub fn is_focused(&self) -> Result<bool, crate::Error> {
+        Ok(true)
+    }
+
+    pub fn is_visible(&self) -> Result<bool, crate::Error> {
+        Ok(true)
+    }
+
+    pub fn is_minimized(&self) -> Result<bool, crate::Error> {
+        Ok(false)
+    }
+
+    pub fn is_maximized(&self) -> Result<bool, crate::Error> {
+        Ok(false)
+    }
+}
+
+impl<R: Runtime> Clone for Window<R> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+            label: self.label.clone(),
+        }
+    }
+}
+
+impl<R: Runtime> std::fmt::Debug for Window<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Window")
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
+impl<R: Runtime> Manager<R> for Window<R> {
+    fn app_handle(&self) -> &AppHandle<R> {
+        &self.handle
+    }
+}
+
+/// Stub `Config` returned by `Manager::config()`. Real Tauri returns the
+/// parsed `tauri.conf.json`; the shim has no such file.
+#[derive(Debug, Default, Clone)]
+pub struct Config {
+    _private: (),
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Self { _private: () }
     }
 }
 
@@ -175,6 +281,47 @@ pub trait Manager<R: Runtime>: Sized {
 
     fn try_state<T: Send + Sync + 'static>(&self) -> Option<State<'_, T>> {
         self.app_handle().inner.state.try_get::<T>()
+    }
+
+    /// Fetch a window by label. Returns `None` if no client has identified
+    /// itself with that label.
+    fn get_webview_window(&self, label: &str) -> Option<WebviewWindow<R>> {
+        let windows = self
+            .app_handle()
+            .inner
+            .windows
+            .read()
+            .expect("windows map poisoned");
+        if windows.contains_key(label) {
+            Some(Window::new(self.app_handle().clone(), label.to_string()))
+        } else {
+            None
+        }
+    }
+
+    /// Snapshot of every window the shim currently knows about.
+    fn webview_windows(&self) -> HashMap<String, WebviewWindow<R>> {
+        let windows = self
+            .app_handle()
+            .inner
+            .windows
+            .read()
+            .expect("windows map poisoned");
+        windows
+            .keys()
+            .map(|label| {
+                (
+                    label.clone(),
+                    Window::new(self.app_handle().clone(), label.clone()),
+                )
+            })
+            .collect()
+    }
+
+    /// Stub configuration. Real Tauri returns the compiled-in
+    /// `tauri.conf.json`; the shim has none.
+    fn config(&self) -> Config {
+        Config::new()
     }
 }
 
